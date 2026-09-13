@@ -1,0 +1,14 @@
+# 训练产物：模型权重与日志（每个 .pt 约 13MB，不进仓库）
+out/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+
+# 虚拟环境（如果在这个目录里建过）
+.venv/
+venv/
+
+# 编辑器
+.vscode/
+.idea/

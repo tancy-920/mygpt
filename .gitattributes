@@ -1,0 +1,5 @@
+# 仓库内统一用 LF 换行，避免 Windows / Linux 协作者之间产生"整文件 diff"
+* text=auto eol=lf
+
+# 模型权重是二进制
+*.pt binary

@@ -1,0 +1,22 @@
+[
+  {
+    "seq_len": 1,
+    "ms_per_forward": 10.24
+  },
+  {
+    "seq_len": 64,
+    "ms_per_forward": 11.5
+  },
+  {
+    "seq_len": 256,
+    "ms_per_forward": 11.85
+  },
+  {
+    "seq_len": 512,
+    "ms_per_forward": 11.59
+  },
+  {
+    "seq_len": 1024,
+    "ms_per_forward": 13.77
+  }
+]

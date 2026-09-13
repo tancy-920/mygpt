@@ -1,0 +1,7 @@
+# mygpt 依赖
+#
+# 只需 PyTorch。RTX 50 系（Blackwell / sm_120）需要 CUDA 12.8 及以上的构建：
+#     pip install torch --index-url https://download.pytorch.org/whl/cu128
+# 其他显卡 / 只用 CPU：
+#     pip install torch
+torch>=2.4

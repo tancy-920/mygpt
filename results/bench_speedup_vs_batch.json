@@ -1,0 +1,23 @@
+[
+  {
+    "batch": 1,
+    "gen_tokens": 479,
+    "no_cache_sec": 2.055,
+    "with_cache_sec": 2.103,
+    "speedup": 0.98
+  },
+  {
+    "batch": 8,
+    "gen_tokens": 479,
+    "no_cache_sec": 3.566,
+    "with_cache_sec": 2.008,
+    "speedup": 1.78
+  },
+  {
+    "batch": 32,
+    "gen_tokens": 479,
+    "no_cache_sec": 88.93,
+    "with_cache_sec": 2.912,
+    "speedup": 30.54
+  }
+]

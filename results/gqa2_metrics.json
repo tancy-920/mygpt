@@ -1,0 +1,85 @@
+{
+  "run_name": "gqa2",
+  "norm": "layernorm",
+  "n_kv_head": 2,
+  "n_head": 4,
+  "n_layer": 4,
+  "n_embd": 256,
+  "block_size": 128,
+  "batch_size": 32,
+  "max_steps": 3000,
+  "num_params": 2945792,
+  "train_time_sec": 83.56,
+  "ms_per_step": 27.84,
+  "tokens_per_sec": 147112.3,
+  "peak_mem_MB": 361.2,
+  "final_train_loss": 1.1512,
+  "final_val_loss": 1.4994,
+  "history": [
+    {
+      "step": 0,
+      "train": 4.2428,
+      "val": 4.2402
+    },
+    {
+      "step": 250,
+      "train": 2.1339,
+      "val": 2.1777
+    },
+    {
+      "step": 500,
+      "train": 1.737,
+      "val": 1.8854
+    },
+    {
+      "step": 750,
+      "train": 1.5646,
+      "val": 1.735
+    },
+    {
+      "step": 1000,
+      "train": 1.4694,
+      "val": 1.656
+    },
+    {
+      "step": 1250,
+      "train": 1.3895,
+      "val": 1.6178
+    },
+    {
+      "step": 1500,
+      "train": 1.3412,
+      "val": 1.5593
+    },
+    {
+      "step": 1750,
+      "train": 1.2926,
+      "val": 1.539
+    },
+    {
+      "step": 2000,
+      "train": 1.2542,
+      "val": 1.5248
+    },
+    {
+      "step": 2250,
+      "train": 1.2115,
+      "val": 1.5283
+    },
+    {
+      "step": 2500,
+      "train": 1.1895,
+      "val": 1.5077
+    },
+    {
+      "step": 2750,
+      "train": 1.1562,
+      "val": 1.501
+    },
+    {
+      "step": 3000,
+      "train": 1.1512,
+      "val": 1.4994
+    }
+  ]
+}
