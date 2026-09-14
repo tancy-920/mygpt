@@ -189,7 +189,10 @@ cd mygpt
 pip install -r requirements.txt          # RTX 50 系请用 cu128 索引，见文件头注释
 
 python train.py --run_name base          # 笔记本 GPU 上约 75 秒
-python sample.py --run_name base         # 用真实剧本片段续写
+
+# 给一个开头，让模型接着往下写。模型是字符级的，开头请用英文字母 / 数字 / 标点
+python sample.py --prompt "Shakespeare"
+python sample.py --run_name base         # 不给开头时，用内置的剧本片段
 ```
 
 ## 七、复现全部对照实验
@@ -267,6 +270,7 @@ I built this to understand the *internals* of modern LLM inference (KV cache, GQ
 ```bash
 pip install -r requirements.txt
 python train.py --run_name base      # ~75 s on a laptop GPU
+python sample.py --prompt "Shakespeare"   # continue writing from your own prompt
 python bench.py                      # reproduces every number below
 ```
 

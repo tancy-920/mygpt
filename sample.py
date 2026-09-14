@@ -4,17 +4,24 @@ sample.py —— 加载训练好的权重，生成一段文本
 ============================================
 
 用法（在本目录下执行）：
-    python sample.py --run_name base                        # 用真实前缀续写
+    python sample.py --prompt "Shakespeare"                 # 自己给一个开头，让模型往后续写
     python sample.py --run_name rmsnorm --gen_tokens 300 --temperature 0.7
+    python sample.py --from_newline                         # 不带开头，直接从头生成
 
 参数说明：
-    --gen_tokens   生成多少个字符
+    --prompt       开头文字。模型会把它当作已有的上文，往后接着写
+    --gen_tokens   想生成多少个字符（受上下文长度上限约束，见下方注 2）
     --temperature  采样温度：越低越保守（趋近贪心），越高越随机
     --top_k        只从概率最高的 k 个字符里采样；设 0 表示不限制
     --from_newline 不带任何前缀，从换行符开始生成（默认用一个真实剧本片段开头）
 
-注：推理性能（KV cache 加速比、GQA 显存）的对照实验统一在 bench.py 中完成，
-    本文件只负责生成文本样本。
+注 1：本模型是字符级的，词表里只有 65 个字符（英文字母大小写、数字、常用标点、空格、换行）。
+      开头里若出现词表之外的字符（如中文），会被忽略，并在运行时提示。
+注 2：上下文上限为 block_size（默认 128）。开头 + 生成部分合计不超过这个数，
+      所以开头越长，能续写的长度越短。
+
+注 3：推理性能（KV cache 加速比、GQA 显存）的对照实验统一在 bench.py 中完成，
+      本文件只负责生成文本样本。
 """
 import argparse
 from pathlib import Path
@@ -41,6 +48,8 @@ def load_model(run_name, device):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run_name", type=str, default="base")
+    ap.add_argument("--prompt", type=str, default=None,
+                    help="开头文字；不给则用内置的剧本片段")
     ap.add_argument("--gen_tokens", type=int, default=200)
     ap.add_argument("--temperature", type=float, default=0.8)
     ap.add_argument("--top_k", type=int, default=40)
@@ -60,15 +69,26 @@ def main():
         idx = torch.zeros((1, 1), dtype=torch.long, device=device)
         prefix = ""
     else:
-        ids = [stoi[ch] for ch in PROMPT if ch in stoi]
+        text_in = args.prompt if args.prompt is not None else PROMPT
+        dropped = sorted({ch for ch in text_in if ch not in stoi})
+        if dropped:
+            print(f"提示：以下字符不在词表内，已忽略 —— {''.join(dropped)!r}")
+        ids = [stoi[ch] for ch in text_in if ch in stoi]
+        if not ids:
+            raise SystemExit("开头里没有任何词表内的字符，无法生成。请改用英文字母、数字或标点。")
         idx = torch.tensor([ids], dtype=torch.long, device=device)
         prefix = "".join(chars[i] for i in ids)
 
+    # 开头比上下文上限还长时，只保留最后 block_size 个字符（与 generate 内部的处理一致）
+    idx = idx[:, -model.config.block_size:]
+    prefix = prefix[-idx.size(1):]
+
     print("=" * 70)
     print(f"权重: out/{args.run_name}.pt    参数量 {model.num_params():,}    设备 {device}")
+    print(f"开头: {prefix!r}")
     print("=" * 70)
 
-    n = min(args.gen_tokens, model.config.block_size - idx.size(1))
+    n = max(0, min(args.gen_tokens, model.config.block_size - idx.size(1)))
     out = model.generate(
         idx,
         max_new_tokens=n,
@@ -80,7 +100,7 @@ def main():
 
     print(f"\n--- temperature={args.temperature}  top_k={args.top_k} "
           f"use_cache={args.use_cache} ---")
-    print(text if args.from_newline else text[len(prefix):])
+    print(text)
 
 
 if __name__ == "__main__":
