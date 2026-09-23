@@ -1,18 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-model.py —— 约 3.2M 参数的字符级 GPT，含三项可开关的推理优化
-==============================================================
+model.py —— 约 3.2M 参数的字符级 GPT，含四项可开关的注意力与缓存优化
+======================================================================
 
-三项改进均由配置项或调用参数控制，以便逐项做「改前 / 改后」对照实验：
+每项改进都由配置项或调用参数控制，以便逐项做「改前 / 改后」对照实验：
 
     GPTConfig.norm       "layernorm" | "rmsnorm"   改进 A：RMSNorm 替换 LayerNorm
     generate(use_cache=) True | False              改进 B：KV cache 增量解码
     GPTConfig.n_kv_head  < n_head 即启用           改进 C：GQA（多个 Q 头共享一组 KV 头）
+    GPTConfig.attn       "baseline" | "sdpa" | "chunked"
+                                                   改进 D：注意力实现三选一
+                                                   （逐位置完整矩阵 / PyTorch 融合内核 / 分块在线 softmax）
+
+另有改进 E（分页 KV cache）不改变本文件的默认路径，见 paged_kv.py。
 
 文件结构（自上而下 6 块）：
     GPTConfig            超参数
     LayerNorm / RMSNorm  两种归一化，改进 A 在此二选一
-    CausalSelfAttention  因果自注意力，改进 B / C 都落在这个类里
+    CausalSelfAttention  因果自注意力，改进 B / C / D 都落在这个类里
     MLP                  前馈网络
     Block                一层 = 注意力 + MLP，各带残差与归一化
     GPT                  整体：嵌入 → N 层 Block → 输出层
@@ -20,14 +25,26 @@ model.py —— 约 3.2M 参数的字符级 GPT，含三项可开关的推理优
 命令行入口：
     train.py   训练 + 记录指标
     sample.py  加载权重生成文本
-    bench.py   推理性能对照（KV cache 加速比 / GQA 显存）
+    bench.py   推理性能对照（KV cache 加速比 / GQA 显存 / 注意力实现对比 / 分页缓存容量）
 """
 import math
+import warnings
 from dataclasses import dataclass
 
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
+
+try:                                    # 老版本 PyTorch 没有这个接口，缺了也能跑（退回默认分发器）
+    from torch.nn.attention import SDPBackend, sdpa_kernel
+except ImportError:                     # pragma: no cover
+    SDPBackend = sdpa_kernel = None
+
+# 真正"融合"的注意力内核；MATH 是按定义逐步骤算的参考实现，又慢又吃显存，所以排除在外。
+_SDPA_FUSED_BACKENDS = (
+    [SDPBackend.FLASH_ATTENTION, SDPBackend.CUDNN_ATTENTION, SDPBackend.EFFICIENT_ATTENTION]
+    if SDPBackend is not None else None
+)
 
 
 # ============================================================
@@ -46,6 +63,7 @@ class GPTConfig:
     dropout: float = 0.0       # 小数据集设 0（更快）
     bias: bool = True          # 线性层是否带 bias
     norm: str = "layernorm"    # 改进 A 的开关："layernorm" 或 "rmsnorm"
+    attn: str = "baseline"     # 改进 D 的开关："baseline" / "sdpa" / "chunked"
 
 
 # ============================================================
@@ -115,7 +133,12 @@ class CausalSelfAttention(nn.Module):
     q·k 越大代表越相关，经 softmax 归一化成权重后，用权重对 v 加权求和。
 
     「因果」体现在掩码上：位置 i 只能看到 j <= i，训练时不允许提前看到答案。
-    改进 B（KV cache）与改进 C（GQA）都在这一个类里。
+    改进 B（KV cache）、改进 C（GQA）、改进 D（注意力实现）都在这一个类里。
+
+    改进 D 提供三种等价但代价不同的注意力实现，由 GPTConfig.attn 选择：
+        "baseline"  逐位置算出完整的 Tq×Tk 分数矩阵，最直白，显存随 T² 增长（默认）
+        "sdpa"      转交给 PyTorch 的融合注意力内核（scaled_dot_product_attention）
+        "chunked"   把 key 分块、用在线 softmax 逐块累加，不生成完整的 Tq×Tk 矩阵
     """
 
     def __init__(self, config):
@@ -127,6 +150,11 @@ class CausalSelfAttention(nn.Module):
         self.n_kv_head = config.n_kv_head       # 改进 C：KV 头数
         self.head_dim = config.n_embd // config.n_head
         self.dropout = config.dropout
+        # 改进 D：读配置决定用哪种注意力实现。旧权重文件里的 GPTConfig 可能没有这个字段，
+        # 所以用 getattr 兜底，默认仍是 "baseline"（与加改进 D 之前的行为完全一致）。
+        self.attn_impl = getattr(config, "attn", "baseline")
+        assert self.attn_impl in ("baseline", "sdpa", "chunked"), \
+            "attn 只能是 baseline / sdpa / chunked 三者之一"
 
         # 三个投影。nanoGPT 上游把 qkv 合并为单个 c_attn，这里拆开是为了支持 GQA（k/v 的输出维度可以更小）
         self.q_proj = nn.Linear(config.n_embd, self.n_head * self.head_dim, bias=config.bias)
@@ -167,24 +195,115 @@ class CausalSelfAttention(nn.Module):
             v = torch.cat((past_v, v), dim=2)
         new_kv = (k, v) if use_cache else None
 
-        # ---- 改进 C：GQA ----
-        # k/v 头数少于 q 头数时，把每个 k/v 头复制若干份，各自服务一组 q 头。
-        # 效果：KV cache 的显存占用按 n_kv_head / n_head 缩小。
-        if self.n_kv_head != self.n_head:
-            rep = self.n_head // self.n_kv_head
-            k = k.repeat_interleave(rep, dim=1)
-            v = v.repeat_interleave(rep, dim=1)
-
         Tq, Tk = q.size(2), k.size(2)
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))   # (B, nh, Tq, Tk)
-        # 取掩码的对应切片：增量解码时 Tq=1，该行掩码天然全为 1，无需屏蔽任何位置
-        att = att.masked_fill(self.mask[:, :, Tk - Tq : Tk, :Tk] == 0, float("-inf"))
-        att = F.softmax(att, dim=-1)
-        att = self.attn_dropout(att)
+        # 因果掩码的切片：Tq == Tk（训练、整段前向）时取到的就是标准下三角；
+        # Tq == 1（增量解码）时取的是最后一行，全为 1，表示当前字符可以看到全部历史。
+        mask = self.mask[:, :, Tk - Tq : Tk, :Tk]
 
-        y = att @ v                                                          # (B, nh, Tq, hd)
+        # ---- 改进 D：三种实现算的是同一件事，只是做法与代价不同 ----
+        if self.attn_impl == "sdpa":
+            y = self._attn_sdpa(q, k, v, mask)
+        elif self.attn_impl == "chunked":
+            y = self._attn_chunked(q, k, v, mask)
+        else:
+            y = self._attn_baseline(q, k, v, mask)
+
         y = y.transpose(1, 2).contiguous().view(B, Tq, C)
         return self.resid_dropout(self.c_proj(y)), new_kv
+
+    def _expand_kv(self, k, v):
+        """改进 C：k/v 头数少于 q 头数时，把每个 k/v 头复制若干份，各自服务一组 q 头。
+
+        效果：KV cache 的显存占用按 n_kv_head / n_head 缩小。
+        """
+        if self.n_kv_head == self.n_head:
+            return k, v
+        rep = self.n_head // self.n_kv_head
+        return k.repeat_interleave(rep, dim=1), v.repeat_interleave(rep, dim=1)
+
+    def _attn_baseline(self, q, k, v, mask):
+        """基线实现：先把完整的 Tq×Tk 分数矩阵算出来，再 softmax、加权求和。
+
+        最直白的做法，显存占用随 Tk 线性增长（B=8、4 头、T=2048 实测峰值 532 MiB）。
+        """
+        k, v = self._expand_kv(k, v)
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(self.head_dim))   # (B, nh, Tq, Tk)
+        att = att.masked_fill(mask == 0, float("-inf"))
+        att = self.attn_dropout(F.softmax(att, dim=-1))
+        return att @ v                                                       # (B, nh, Tq, hd)
+
+    def _attn_sdpa(self, q, k, v, mask):
+        """交给 PyTorch 的融合注意力内核（scaled_dot_product_attention）计算。
+
+        两个容易踩错的地方，都是实测确认过的，写在这里避免以后改错：
+          1. 掩码用 bool 张量显式传入，不要用 is_causal=True。SDPA 的 is_causal 是
+             「左上对齐」：Tq=1、Tk=64 时它只让当前这个 query 看到第 0 个 key，而基线实现
+             允许它看到全部 64 个，两者输出相差 3.2（不是舍入误差）。显式传掩码则与基线
+             实现逐元素一致（差值 2.9e-3，bf16 精度量级）。
+          2. 掩码的数据类型要和 q 一致。q 是 bf16 而掩码是 float32 时会算出错误结果，
+             而且不报错 —— 传 bool 张量最省事，也绕开了这个坑。
+        enable_gqa=True 让内核直接使用未展开的 k/v（n_kv_head < n_head 时），省掉一次复制。
+
+        3. 必须把融合内核显式列出来（sdpa_kernel 上下文）。默认分发器在 GQA 这组形状下
+           会挑中 MATH 后端 —— 那是按定义逐步算的参考实现，实测 T=2048 时要 21.6 ms、
+           1256 MiB，比融合内核慢一个数量级。显式指定后同样条件下是 1.35 ms、40 MiB。
+        """
+        kwargs = dict(
+            attn_mask=mask.bool(),
+            dropout_p=self.dropout if self.training else 0.0,
+            scale=1.0 / math.sqrt(self.head_dim),
+            enable_gqa=(self.n_kv_head != self.n_head),
+        )
+        if _SDPA_FUSED_BACKENDS is None:            # 老版本 PyTorch，只能用默认分发器
+            return F.scaled_dot_product_attention(q, k, v, **kwargs)
+        try:
+            # 指定后端列表后，分发器会对被排除的内核逐条发 UserWarning（本机哪些内核可用
+            # 已由 bench.py 记录在 results/bench_attention_impls.json 里），这里不再重复输出。
+            with warnings.catch_warnings(), sdpa_kernel(_SDPA_FUSED_BACKENDS):
+                warnings.simplefilter("ignore")
+                return F.scaled_dot_product_attention(q, k, v, **kwargs)
+        except RuntimeError:                        # 本机融合内核不支持这组输入时退回默认分发器
+            return F.scaled_dot_product_attention(q, k, v, **kwargs)
+
+    def _attn_chunked(self, q, k, v, mask, block=64):
+        """分块 + 在线 softmax：把 key 沿长度切成若干块逐块累加，不生成完整的 Tq×Tk 矩阵。
+
+        算法结构与 FlashAttention 相同（分块、维护 running max 与 running sum、用重缩放
+        系数把上一轮的累加结果折算到新的 max 上），区别在于这里是纯 PyTorch 的逐块算子
+        组合，不是编译到 GPU 的融合内核。
+
+        代价与收益（bench.py 实验 4 有实测）：峰值显存不再随 Tk² 增长，整模型 T=2048 时
+        基线 604 MB → 本实现 185 MB；代价是每个分块一次算子启动开销，墙钟比基线慢。
+
+        一处与基线不同的细节：dropout 打在这里（加权平均之后），基线打在 softmax 之后、
+        乘 v 之前。dropout=0 时两者完全等价（本仓库全部实验都是 0）；dropout>0 时两者是
+        同一期望的两种采样实现，不再逐元素相等。
+        """
+        k, v = self._expand_kv(k, v)
+        scale = 1.0 / math.sqrt(self.head_dim)
+        B, nh, Tq, hd = q.shape
+        Tk = k.size(2)
+
+        out = torch.zeros((B, nh, Tq, hd), device=q.device, dtype=torch.float32)
+        # 用 fp32 的最小有限值而不是 -inf 起手：若某一块被整块屏蔽，-inf 减 -inf 会得到 NaN
+        m_i = torch.full((B, nh, Tq, 1), torch.finfo(torch.float32).min,
+                         device=q.device, dtype=torch.float32)
+        l_i = torch.zeros((B, nh, Tq, 1), device=q.device, dtype=torch.float32)
+
+        for start in range(0, Tk, block):
+            end = min(start + block, Tk)
+            s = (q @ k[:, :, start:end, :].transpose(-2, -1)).float() * scale   # (B, nh, Tq, 本块长度)
+            s = s.masked_fill(mask[:, :, :, start:end] == 0, float("-inf"))
+
+            m_new = torch.maximum(m_i, s.max(dim=-1, keepdim=True).values)   # 加入本块后的最大值
+            alpha = torch.exp(m_i - m_new)                                   # 旧累加结果要乘的折算系数
+            p = torch.exp(s - m_new)                                         # 本块权重（已按新 max 归一化）
+            l_i = l_i * alpha + p.sum(dim=-1, keepdim=True)
+            out = out * alpha + p @ v[:, :, start:end, :].float()
+            m_i = m_new
+
+        y = out / l_i                                     # 除以权重总和，得到加权平均
+        return self.attn_dropout(y).to(q.dtype)
 
 
 # ============================================================
