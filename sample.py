@@ -22,6 +22,9 @@ sample.py —— 加载训练好的权重，生成一段文本
 
 注 3：推理性能（KV cache 加速比、GQA 显存）的对照实验统一在 bench.py 中完成，
       本文件只负责生成文本样本。
+
+注 4：--temperature 设 0 表示贪心 —— 每一步都取分数最高的那个字符，结果完全确定。
+      这个值不能取负数。
 """
 import argparse
 from pathlib import Path
@@ -51,13 +54,17 @@ def main():
     ap.add_argument("--prompt", type=str, default=None,
                     help="开头文字；不给则用内置的剧本片段")
     ap.add_argument("--gen_tokens", type=int, default=200)
-    ap.add_argument("--temperature", type=float, default=0.8)
+    ap.add_argument("--temperature", type=float, default=0.8,
+                    help="采样温度：越低越保守；设 0 表示贪心（每步取分数最高的字符）")
     ap.add_argument("--top_k", type=int, default=40)
     ap.add_argument("--from_newline", action="store_true", help="从换行符开始生成，不带前缀")
     ap.add_argument("--use_cache", action="store_true", help="生成时启用 KV cache（结果文本相同）")
     ap.add_argument("--seed", type=int, default=1337, help="固定随机种子，保证同一命令可复现")
     ap.add_argument("--device", type=str, default=None)
     args = ap.parse_args()
+
+    if args.temperature < 0:
+        raise SystemExit("--temperature 不能为负数：设 0 表示贪心，或者给一个正数。")
 
     device = args.device or ("cuda" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(args.seed)

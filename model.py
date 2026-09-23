@@ -335,9 +335,18 @@ class GPT(nn.Module):
 
     @staticmethod
     def _sample_and_append(idx, logits, temperature, top_k):
-        """从最后一组分数中采样一个字符，并追加到序列末尾。"""
+        """从最后一组分数中采样一个字符，并追加到序列末尾。
+
+        temperature 约定为正数。设为 0 时按贪心处理：直接取分数最大的那个字符。
+        贪心单独走一条分支，是为了避开 softmax 与 multinomial —— 除以 0 会得到 ±inf，
+        过完 softmax 是一整片 NaN，而 NaN 送进采样内核会让 CUDA 内核报错退出。
+        另外 argmax 的结果不受正数缩放影响，所以这一支也无需先做除法。
+        """
+        if temperature <= 0:
+            idx_next = logits.argmax(dim=-1, keepdim=True)
+            return torch.cat((idx, idx_next), dim=1)
         logits = logits / temperature
-        if top_k is not None:
+        if top_k is not None and top_k > 0:
             v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
             logits[logits < v[:, [-1]]] = -float("inf")
         probs = F.softmax(logits, dim=-1)
