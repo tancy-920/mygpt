@@ -1,0 +1,288 @@
+{
+  "setup": {
+    "device": "cuda",
+    "dtype": "bfloat16（测速）/ float32 与 bfloat16（等价性）",
+    "batch": 8,
+    "n_head": 4,
+    "head_dim": 64,
+    "n_layer": 4,
+    "sdpa_forced_backends": [
+      "FLASH_ATTENTION",
+      "CUDNN_ATTENTION",
+      "EFFICIENT_ATTENTION"
+    ],
+    "flash_attn_available": false,
+    "backend_detection": "强制指定 sdpa_kernel([...]) 逐个试，谁不报错就是谁能跑（本机 profiler 与 nvidia-smi 都取不到 kernel 名）",
+    "torch": "2.11.0+cu128"
+  },
+  "rows": [
+    {
+      "n_kv_head": 4,
+      "seq_len": 128,
+      "impl": "baseline",
+      "ms": 3.728,
+      "peak_MB": 54.19
+    },
+    {
+      "n_kv_head": 4,
+      "seq_len": 128,
+      "impl": "sdpa",
+      "ms": 3.4,
+      "peak_MB": 54.19
+    },
+    {
+      "n_kv_head": 4,
+      "seq_len": 128,
+      "impl": "chunked",
+      "ms": 6.26,
+      "peak_MB": 56.75
+    },
+    {
+      "n_kv_head": 4,
+      "seq_len": 512,
+      "impl": "baseline",
+      "ms": 4.63,
+      "peak_MB": 90.47
+    },
+    {
+      "n_kv_head": 4,
+      "seq_len": 512,
+      "impl": "sdpa",
+      "ms": 3.185,
+      "peak_MB": 72.22
+    },
+    {
+      "n_kv_head": 4,
+      "seq_len": 512,
+      "impl": "chunked",
+      "ms": 14.306,
+      "peak_MB": 82.47
+    },
+    {
+      "n_kv_head": 4,
+      "seq_len": 2048,
+      "impl": "baseline",
+      "ms": 53.906,
+      "peak_MB": 604.32
+    },
+    {
+      "n_kv_head": 4,
+      "seq_len": 2048,
+      "impl": "sdpa",
+      "ms": 19.276,
+      "peak_MB": 144.32
+    },
+    {
+      "n_kv_head": 4,
+      "seq_len": 2048,
+      "impl": "chunked",
+      "ms": 131.656,
+      "peak_MB": 185.32
+    },
+    {
+      "n_kv_head": 1,
+      "seq_len": 128,
+      "impl": "baseline",
+      "ms": 3.325,
+      "peak_MB": 53.44
+    },
+    {
+      "n_kv_head": 1,
+      "seq_len": 128,
+      "impl": "sdpa",
+      "ms": 3.089,
+      "peak_MB": 53.44
+    },
+    {
+      "n_kv_head": 1,
+      "seq_len": 128,
+      "impl": "chunked",
+      "ms": 6.115,
+      "peak_MB": 56.25
+    },
+    {
+      "n_kv_head": 1,
+      "seq_len": 512,
+      "impl": "baseline",
+      "ms": 4.45,
+      "peak_MB": 90.72
+    },
+    {
+      "n_kv_head": 1,
+      "seq_len": 512,
+      "impl": "sdpa",
+      "ms": 3.032,
+      "peak_MB": 71.47
+    },
+    {
+      "n_kv_head": 1,
+      "seq_len": 512,
+      "impl": "chunked",
+      "ms": 13.645,
+      "peak_MB": 82.72
+    },
+    {
+      "n_kv_head": 1,
+      "seq_len": 2048,
+      "impl": "baseline",
+      "ms": 51.092,
+      "peak_MB": 607.57
+    },
+    {
+      "n_kv_head": 1,
+      "seq_len": 2048,
+      "impl": "sdpa",
+      "ms": 13.883,
+      "peak_MB": 143.57
+    },
+    {
+      "n_kv_head": 1,
+      "seq_len": 2048,
+      "impl": "chunked",
+      "ms": 129.369,
+      "peak_MB": 188.57
+    }
+  ],
+  "dispatcher_vs_forced": {
+    "shape": {
+      "batch": 8,
+      "n_head": 4,
+      "n_kv_head": 1,
+      "seq_len": 2048,
+      "head_dim": 64
+    },
+    "forced_backends": [
+      "FLASH_ATTENTION",
+      "CUDNN_ATTENTION",
+      "EFFICIENT_ATTENTION"
+    ],
+    "default_ms": 21.73,
+    "default_peak_MB": 1257.31,
+    "forced_ms": 1.292,
+    "forced_peak_MB": 41.25,
+    "speed_ratio": 16.82
+  },
+  "repeatability": {
+    "n_kv_head": 1,
+    "seq_len": 2048,
+    "round_1_ms": {
+      "baseline": 51.136,
+      "sdpa": 13.376
+    },
+    "round_2_ms": {
+      "baseline": 51.936,
+      "sdpa": 14.404
+    },
+    "spread_pct": {
+      "baseline": 1.56,
+      "sdpa": 7.69
+    }
+  },
+  "equivalence": [
+    {
+      "dtype": "float32",
+      "n_kv_head": 4,
+      "impl": "sdpa",
+      "max_abs_diff": 8.345e-07,
+      "mean_abs_diff": 1.264e-07,
+      "cosine": 1.0,
+      "argmax_match": true,
+      "usable_backends": [
+        "EFFICIENT_ATTENTION",
+        "MATH"
+      ]
+    },
+    {
+      "dtype": "float32",
+      "n_kv_head": 4,
+      "impl": "chunked",
+      "max_abs_diff": 5.96e-07,
+      "mean_abs_diff": 1.17e-07,
+      "cosine": 1.0,
+      "argmax_match": true,
+      "usable_backends": [
+        "EFFICIENT_ATTENTION",
+        "MATH"
+      ]
+    },
+    {
+      "dtype": "float32",
+      "n_kv_head": 1,
+      "impl": "sdpa",
+      "max_abs_diff": 5.96e-07,
+      "mean_abs_diff": 1.108e-07,
+      "cosine": 1.0,
+      "argmax_match": true,
+      "usable_backends": [
+        "MATH"
+      ]
+    },
+    {
+      "dtype": "float32",
+      "n_kv_head": 1,
+      "impl": "chunked",
+      "max_abs_diff": 6.109e-07,
+      "mean_abs_diff": 1.154e-07,
+      "cosine": 1.00000012,
+      "argmax_match": true,
+      "usable_backends": [
+        "MATH"
+      ]
+    },
+    {
+      "dtype": "bfloat16",
+      "n_kv_head": 4,
+      "impl": "sdpa",
+      "max_abs_diff": 0.01172,
+      "mean_abs_diff": 0.002052,
+      "cosine": 0.99996895,
+      "argmax_match": true,
+      "usable_backends": [
+        "CUDNN_ATTENTION",
+        "EFFICIENT_ATTENTION",
+        "MATH"
+      ]
+    },
+    {
+      "dtype": "bfloat16",
+      "n_kv_head": 4,
+      "impl": "chunked",
+      "max_abs_diff": 0.01562,
+      "mean_abs_diff": 0.002042,
+      "cosine": 0.99996901,
+      "argmax_match": true,
+      "usable_backends": [
+        "CUDNN_ATTENTION",
+        "EFFICIENT_ATTENTION",
+        "MATH"
+      ]
+    },
+    {
+      "dtype": "bfloat16",
+      "n_kv_head": 1,
+      "impl": "sdpa",
+      "max_abs_diff": 0.0127,
+      "mean_abs_diff": 0.002046,
+      "cosine": 0.99996877,
+      "argmax_match": true,
+      "usable_backends": [
+        "CUDNN_ATTENTION",
+        "MATH"
+      ]
+    },
+    {
+      "dtype": "bfloat16",
+      "n_kv_head": 1,
+      "impl": "chunked",
+      "max_abs_diff": 0.01172,
+      "mean_abs_diff": 0.002027,
+      "cosine": 0.99996895,
+      "argmax_match": true,
+      "usable_backends": [
+        "CUDNN_ATTENTION",
+        "MATH"
+      ]
+    }
+  ],
+  "note": "耗时取 10 次最小值，每次前后 synchronize；换档前 empty_cache 并清零峰值统计。sdpa 一档显式指定融合内核列表（见 setup.sdpa_forced_backends），不依赖默认分发器；逐档实际可用的后端见 equivalence 里的 usable_backends。chunked 是纯 PyTorch 的分块在线 softmax，用来说明算法结构，定位不是打赢融合内核，所以它最慢。"
+}
